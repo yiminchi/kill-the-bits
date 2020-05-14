@@ -72,7 +72,7 @@ parser.add_argument('--n-workers', default=20, type=int,
 
 parser.add_argument('--finetune-centroids', default=2500, type=int,
                     help='Number of iterations for layer-wise finetuning of the centroids')
-parser.add_argument('--lr-centroids', default=0.05, type=float,
+parser.add_argument('--lr-centroids', default=0.005, type=float,
                     help='Learning rate to finetune centroids')
 parser.add_argument('--momentum-centroids', default=0.9, type=float,
                     help='Momentum when using SGD')
