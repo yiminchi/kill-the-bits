@@ -6,6 +6,7 @@
 #
 
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 import time
 import math
 import argparse
@@ -28,6 +29,7 @@ from utils.watcher import ActivationWatcher
 from utils.dynamic_sampling import dynamic_sampling
 from utils.statistics import compute_size
 from utils.utils import centroids_from_weights, weight_from_centroids
+from utils.fuse import fuse_ConvBn
 
 
 parser = argparse.ArgumentParser(description='And the bit goes down: Revisiting the quantization of neural networks')
@@ -42,7 +44,7 @@ parser.add_argument('--n-iter', default=100, type=int,
 parser.add_argument('--n-activations', default=1024, type=int,
                     help='Size of the batch of activations to sample from')
 
-parser.add_argument('--block-size-cv', default=9, type=int,
+parser.add_argument('--block-size-cv', default=8, type=int,
                     help='Quantization block size for 3x3 standard convolutions')
 parser.add_argument('--block-size-pw', default=4, type=int,
                     help='Quantization block size for 1x1 convolutions')
@@ -61,7 +63,7 @@ parser.add_argument('--n-centroids-threshold', default=4, type=int,
 parser.add_argument('--eps', default=1e-8, type=float,
                     help='For empty cluster resolution')
 
-parser.add_argument('--data-path', default='/datasets01/imagenet_full_size/061417/', type=str,
+parser.add_argument('--data-path', default='/Dataset/Imagenet', type=str,
                     help='Path to ImageNet dataset')
 parser.add_argument('--batch-size', default=128, type=int,
                     help='Batch size for fiuetuning steps')
@@ -111,12 +113,18 @@ def main():
     # layers to quantize (we do not quantize the first 7x7 convolution layer)
     watcher = ActivationWatcher(student)
     layers = [layer for layer in watcher.layers[1:] if args.block in layer]
+    bn_layers = watcher._get_bn_layers()[1:]
+
+    # fuse the first layer
+    fuse_ConvBn(student, watcher.layers[0], watcher._get_bn_layers()[0])
 
     # data loading code
     train_loader, test_loader = load_data(data_path=args.data_path, batch_size=args.batch_size, nb_workers=args.n_workers)
 
     # parameters for the centroids optimizer
     opt_centroids_params_all = []
+    # parameters for the bias optimizer
+    opt_bias_params_all = []
 
     # book-keeping for compression statistics (in MB)
     size_uncompressed = compute_size(student)
@@ -133,13 +141,7 @@ def main():
     t = time.time()
     top_1 = 0
 
-    for layer in layers:
-        #  gather input activations
-        n_iter_activations = math.ceil(args.n_activations / args.batch_size)
-        watcher = ActivationWatcher(student, layer=layer)
-        in_activations_current = watcher.watch(train_loader, criterion, n_iter_activations)
-        in_activations_current = in_activations_current[layer]
-
+    for i, layer in enumerate(layers):
         # get weight matrix and detach it from the computation graph (.data should be enough, adding .detach() as a safeguard)
         M = attrgetter(layer + '.weight.data')(student).detach()
         sizes = M.size()
@@ -152,6 +154,10 @@ def main():
 
         # block size, distinguish between fully connected and convolutional case
         if is_conv:
+            # fuse conv and bn
+            fuse_ConvBn(student, layer, bn_layers[i])
+            M = attrgetter(layer + '.weight.data')(student).detach()
+
             out_features, in_features, k, _ = sizes
             block_size = args.block_size_cv if k > 1 else args.block_size_pw
             n_centroids = args.n_centroids_cv if k > 1 else args.n_centroids_pw
@@ -194,7 +200,7 @@ def main():
                bits_per_weight, size_index_layer + size_centroids_layer))
 
         # quantizer
-        quantizer = PQ(in_activations_current, M, n_activations=args.n_activations,
+        quantizer = PQ(M, n_activations=args.n_activations,
                        n_samples=n_samples, eps=args.eps, n_centroids=n_centroids,
                        n_iter=args.n_iter, n_blocks=n_blocks, k=k,
                        stride=stride, padding=padding, groups=groups)
@@ -204,6 +210,7 @@ def main():
             try:
                 # load centroids and assignments if already stored
                 quantizer.load(args.restart, layer)
+                student.load_state_dict(torch.load(os.path.join(args.restart, '{}_state_dict.pth'.format(layer))))
                 centroids = quantizer.centroids
                 assignments = quantizer.assignments
 
@@ -211,15 +218,19 @@ def main():
                 M_hat = weight_from_centroids(centroids, assignments, n_blocks, k, is_conv)
                 attrgetter(layer + '.weight')(student).data = M_hat
                 quantizer.save(args.save, layer)
+                torch.save(student.state_dict(), os.path.join(args.save, '{}_state_dict.pth'.format(layer)))
 
                 # optimizer for global finetuning
-                parameters = [p for (n, p) in student.named_parameters() if layer in n and 'bias' not in n]
+                parameters = [p for (n, p) in student.named_parameters() if layer == n[:n.rfind(".")] and 'bias' not in n]
                 centroids_params = {'params': parameters,
                                     'assignments': assignments,
                                     'kernel_size': k,
                                     'n_centroids': n_centroids,
                                     'n_blocks': n_blocks}
                 opt_centroids_params_all.append(centroids_params)
+
+                bias_params = [p for (n, p) in student.named_parameters() if layer == n[:n.rfind(".")] and 'bias' in n]
+                opt_bias_params_all.append(bias_params[0])
 
                 # proceed to next layer
                 print('Layer already quantized, proceeding to next layer\n')
@@ -228,6 +239,13 @@ def main():
             # otherwise, quantize layer
             except FileNotFoundError:
                 print('Quantizing layer')
+
+        #  gather input activations
+        n_iter_activations = math.ceil(args.n_activations / args.batch_size)
+        watcher = ActivationWatcher(student, layer=layer)
+        in_activations_current = watcher.watch(train_loader, criterion, n_iter_activations)
+        in_activations_current = in_activations_current[layer]
+        quantizer._reshape_activations(in_activations_current)
 
         # quantize layer
         quantizer.encode()
@@ -244,16 +262,24 @@ def main():
         t = time.time()
 
         # Step 2: finetune centroids
-        print('Finetuning centroids')
+        print('Finetuning centroids and bias')
 
         # optimizer for centroids
-        parameters = [p for (n, p) in student.named_parameters() if layer in n and 'bias' not in n]
+        parameters = [p for (n, p) in student.named_parameters() if layer == n[:n.rfind(".")] and 'bias' not in n]
         assignments = quantizer.assignments
         centroids_params = {'params': parameters,
                             'assignments': assignments,
                             'kernel_size': k,
                             'n_centroids': n_centroids,
                             'n_blocks': n_blocks}
+        
+        # optimizer for bias 
+        bias_param = [p for (n, p) in student.named_parameters() if layer == n[:n.rfind(".")] and 'bias' in n]
+        opt_bias_params_all.append(bias_param[0])
+        optimizer_bias = torch.optim.SGD(bias_param, lr=args.lr_centroids,
+                                        momentum=args.momentum_centroids,
+                                        weight_decay=args.weight_decay_centroids)
+
 
         # remember centroids parameters to finetuning at the end
         opt_centroids_params = [centroids_params]
@@ -267,11 +293,13 @@ def main():
         # standard training loop
         n_iter = args.finetune_centroids
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer_centroids, step_size=1, gamma=0.1)
+        scheduler_bias = torch.optim.lr_scheduler.StepLR(optimizer_bias, step_size=1, gamma=0.1)
 
         for epoch in range(1):
-            finetune_centroids(train_loader, student, teacher, criterion, optimizer_centroids, n_iter=n_iter)
+            finetune_centroids(train_loader, student, teacher, criterion, optimizer_centroids, optimizer_bias, n_iter=n_iter)
             top_1 = evaluate(test_loader, student, criterion)
             scheduler.step()
+            scheduler_bias.step()
             print('Epoch: {}, Top1: {:.2f}'.format(epoch, top_1))
 
         print('After {} iterations with learning rate {}, Top1: {:.2f}'.format(n_iter, args.lr_centroids, top_1))
@@ -285,6 +313,7 @@ def main():
         centroids = centroids_from_weights(M_hat, assignments, n_centroids, n_blocks)
         quantizer.centroids = centroids
         quantizer.save(args.save, layer)
+        torch.save(student.state_dict(), os.path.join(args.save, '{}_state_dict.pth'.format(layer)))
 
     # End of compression + finetuning of centroids
     size_compressed = size_index + size_centroids + size_other
@@ -300,33 +329,26 @@ def main():
     optimizer_centroids_all = CentroidSGD(opt_centroids_params_all, lr=args.lr_whole,
                                       momentum=args.momentum_whole,
                                       weight_decay=args.weight_decay_whole)
+    optimizer_bias_all = torch.optim.SGD(opt_bias_params_all, lr=args.lr_whole,
+                                        momentum=args.momentum_whole,
+                                        weight_decay=args.weight_decay_whole)
 
     # standard training loop
     n_iter = args.finetune_whole
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer_centroids_all, step_size=args.finetune_whole_step_size, gamma=0.1)
+    scheduler_bias = torch.optim.lr_scheduler.StepLR(optimizer_bias_all, step_size=args.finetune_whole_step_size, gamma=0.1)
 
     for epoch in range(args.finetune_whole_epochs):
         student.train()
-        finetune_centroids(train_loader, student, teacher, criterion, optimizer_centroids_all, n_iter=n_iter)
+        finetune_centroids(train_loader, student, teacher, criterion, optimizer_centroids_all, optimizer_bias_all, n_iter=n_iter)
         top_1 = evaluate(test_loader, student, criterion)
         scheduler.step()
+        scheduler_bias.step()
         print('Epoch: {}, Top1: {:.2f}'.format(epoch, top_1))
 
     # state dict pf compressed model
     state_dict_compressed = {}
-
-    # save conv1 (not quantized)
     state_dict_compressed['conv1'] = student.conv1.state_dict()
-
-    # save biases of the classifier
-    state_dict_compressed['fc_bias'] = {'bias': student.fc.bias}
-
-    # save batch norms
-    bn_layers = watcher._get_bn_layers()
-
-    for bn_layer in bn_layers:
-        state_dict_compressed[bn_layer] = attrgetter(bn_layer)(student).state_dict()
-
     # save quantized layers
     for layer in layers:
 
@@ -360,18 +382,21 @@ def main():
         n_centroids = min(n_centroids, powers[idx_power - 1])
 
         # save
+        # this loading only want to load assignment to form the centroid
         quantizer.load(args.save, layer)
         assignments = quantizer.assignments
         M_hat = attrgetter(layer + '.weight')(student).data
+        bias = attrgetter(layer + '.bias')(student).data
         centroids = centroids_from_weights(M_hat, assignments, n_centroids, n_blocks)
         quantizer.centroids = centroids
         quantizer.save(args.save, layer)
         state_dict_layer = {
-            'centroids': centroids.half(),
-            'assignments': assignments.short() if 'fc' in layer else assignments.byte(),
+            'centroids': centroids,
+            'assignments': assignments,
             'n_blocks': n_blocks,
             'is_conv': is_conv,
-            'k': k
+            'k': k,
+            'bias' : bias
         }
         state_dict_compressed[layer] = state_dict_layer
 

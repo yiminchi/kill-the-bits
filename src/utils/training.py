@@ -11,7 +11,7 @@ import torch
 import torch.nn.functional as F
 
 
-def finetune_centroids(train_loader, student, teacher, criterion, optimizer, epoch=0, n_iter=-1, verbose=False):
+def finetune_centroids(train_loader, student, teacher, criterion, optimizer, optimizer_bias, epoch=0, n_iter=-1, verbose=False):
     """
     Student/teacher distillation training loop.
 
@@ -58,9 +58,10 @@ def finetune_centroids(train_loader, student, teacher, criterion, optimizer, epo
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
+        optimizer_bias.zero_grad()
         loss.backward()
         optimizer.step()
-
+        optimizer_bias.step()
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()

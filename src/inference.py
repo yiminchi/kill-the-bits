@@ -17,16 +17,17 @@ from data import load_data
 from utils.training import evaluate
 from utils.watcher import ActivationWatcher as ActivationWatcherResNet
 from utils.utils import weight_from_centroids
+from utils.fuse import fuse_ConvBn
 
 
 parser = argparse.ArgumentParser(description='Inference for quantized networks')
 parser.add_argument('--model', default='resnet18', choices=['resnet18', 'resnet50', 'resnet50_semisup'],
                     help='Model to use for inference')
-parser.add_argument('--state-dict-compressed', default='', type=str,
+parser.add_argument('--state-dict-compressed', default='resnet18_test/state_dict_compressed.pth', type=str,
                     help='Path to the compressed state dict of the model')
 parser.add_argument('--device', default='cuda', choices=['cpu', 'cuda'],
                     help='For inference on CPU or on GPU')
-parser.add_argument('--data-path', default='/datasets01/imagenet_full_size/061417/', type=str,
+parser.add_argument('--data-path', default='/Dataset/Imagenet', type=str,
                     help='Path to ImageNet dataset')
 parser.add_argument('--batch-size', default=128, type=int,
                     help='Batch size for fiuetuning steps')
@@ -47,14 +48,18 @@ def main():
     _, test_loader = load_data(data_path=args.data_path, batch_size=args.batch_size, nb_workers=args.n_workers)
     watcher = ActivationWatcherResNet(model)
 
+    # compressed layers
+    compressed_layers = watcher.layers[1:]
+    bn_layers = watcher._get_bn_layers()[1:]
+
+    # fuse the first layer
+    fuse_ConvBn(model, watcher.layers[0], watcher._get_bn_layers()[0])
+
     # conv1 layer (non-compressed)
     layer = 'conv1'
     state_dict_layer = to_device(state_dict_compressed[layer], device)
     attrgetter(layer)(model).load_state_dict(state_dict_layer)
     attrgetter(layer)(model).float()
-
-    # compressed layers
-    compressed_layers = watcher.layers[1:]
 
     # 2 more layers non-compressed for semi-supervised ResNet50
     if args.model == 'resnet50_semisup':
@@ -65,7 +70,7 @@ def main():
             attrgetter(layer)(model).load_state_dict(state_dict_layer)
             attrgetter(layer)(model).float()
 
-    for layer in compressed_layers:
+    for i, layer in enumerate(compressed_layers):
         # recover centroids and assignments
         state_dict_layer = state_dict_compressed[layer]
         centroids = state_dict_layer['centroids'].float().to(device)
@@ -73,23 +78,14 @@ def main():
         n_blocks = state_dict_layer['n_blocks']
         is_conv = state_dict_layer['is_conv']
         k = state_dict_layer['k']
+        bias = state_dict_layer['bias']
+        if is_conv:
+            fuse_ConvBn(model, layer, bn_layers[i])
 
         # instantiate matrix
         M_hat = weight_from_centroids(centroids, assignments, n_blocks, k, is_conv)
         attrgetter(layer + '.weight')(model).data = M_hat
-
-    # batch norms
-    bn_layers = watcher._get_bn_layers()
-
-    for layer in bn_layers:
-        state_dict_layer = to_device(state_dict_compressed[layer], device)
-        attrgetter(layer)(model).weight.data = state_dict_layer['weight'].float().to(device)
-        attrgetter(layer)(model).bias.data = state_dict_layer['bias'].float().to(device)
-
-    # classifier bias
-    layer = 'fc'
-    state_dict_layer = to_device(state_dict_compressed['fc_bias'], device)
-    attrgetter(layer + '.bias')(model).data = state_dict_layer['bias']
+        attrgetter(layer + '.bias')(model).data = bias
 
     # evaluate the model
     top_1 = evaluate(test_loader, model, criterion, device=device).item()

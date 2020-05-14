@@ -27,7 +27,7 @@ class PQ(EM):
         - For efficiency, we subsample the input activations
     """
 
-    def __init__(self, in_activations, M, n_activations=100, n_samples=1000, eps=1e-8, sample=True,
+    def __init__(self, M, n_activations=100, n_samples=1000, eps=1e-8, sample=True,
                  n_blocks=8, n_centroids=512, n_iter=20, k=3, stride=(1, 1), padding=(1, 1), groups=1):
         super(PQ, self).__init__(n_centroids, M, eps=eps)
         self.n_activations = n_activations
@@ -41,19 +41,18 @@ class PQ(EM):
         self.groups = groups
         # reshape activations and weight in the case of convolutions
         self.conv = len(M.size()) == 4
-        self._reshape(in_activations, M)
+        self.M = reshape_weight(M)
         # sanity check
         assert self.M.size(0) % n_blocks == 0, "n_blocks must be a multiple of in_features"
         # initialize centroids
         M_reshaped = self.sample_weights()
         self.initialize_centroids(M_reshaped)
 
-    def _reshape(self, in_activations, M):
+    def _reshape_activations(self, in_activations):
         """
         Rehshapes if conv or fully-connected.
         """
 
-        self.M = reshape_weight(M)
         self.in_activations = reshape_activations(in_activations,
                                                   k=self.k,
                                                   stride=self.stride,
