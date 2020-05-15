@@ -191,7 +191,7 @@ def main():
         n_samples = dynamic_sampling(layer)
 
         # compression rations
-        bits_per_weight = (size_index_layer + size_centroids_layer) * 8 / M.numel()
+        bits_per_weight = (size_index_layer + size_centroids_layer) * 8 * 1024 * 1024/ M.numel()
 
         # print layer size
         print('Quantizing layer: {}, size: {}, n_blocks: {}, block size: {}, ' \
