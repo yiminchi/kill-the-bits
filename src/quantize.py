@@ -175,11 +175,8 @@ def main():
         idx_power = bisect_left(powers, n_vectors / args.n_centroids_threshold)
         n_centroids = min(n_centroids, powers[idx_power - 1])
 
-        # compression rations
-        bits_per_weight = np.log2(n_centroids) / block_size
-
         # number of bits per weight
-        size_index_layer = bits_per_weight * M.numel() / 8 / 1024 / 1024
+        size_index_layer = M.numel() / block_size * np.log2(n_centroids) / 8 / 1024 / 1024
         size_index += size_index_layer
 
         # centroids stored in float16
@@ -192,6 +189,9 @@ def main():
 
         # number of samples
         n_samples = dynamic_sampling(layer)
+
+        # compression rations
+        bits_per_weight = (size_index_layer + size_centroids_layer) * 8 / M.numel()
 
         # print layer size
         print('Quantizing layer: {}, size: {}, n_blocks: {}, block size: {}, ' \

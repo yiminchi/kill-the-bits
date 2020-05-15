@@ -42,7 +42,7 @@ class EM():
         self.eps = eps
         self.verbose = verbose
         self.centroids = torch.Tensor()
-        self.assignments = torch.Tensor()
+        self.assignments = torch.Tensor() # (, n_blocks x C_out)
         self.objective = []
 
     def initialize_centroids(self, M):
