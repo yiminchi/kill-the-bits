@@ -2,7 +2,7 @@
 ```bash
 python quantize.py --model resnet18 --block-size-cv 9 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
-Performance: #TODO
+Performance: 65.4%
 
 # And the bit goes down
 
