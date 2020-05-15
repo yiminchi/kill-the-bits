@@ -15,7 +15,7 @@ def centroids_from_weights(M, assignments, n_centroids, n_blocks):
 
     Args:
         - M: already quantized matrix
-        - assignments: size (n_vectors)
+        - assignments: size (n_blocks, n_vectors)
         - n_centroids: number of centroids
         - n_blocks: niumber of blocks per column
 
@@ -27,11 +27,12 @@ def centroids_from_weights(M, assignments, n_centroids, n_blocks):
     """
 
     M_reshaped = reshape_weight(M)
-    M_unrolled = torch.cat(M_reshaped.chunk(n_blocks, dim=0), dim=1)
-    size_block = M_unrolled.size(0)
-    centroids = torch.zeros(n_centroids, size_block, device=M.device)
-    for k in range(n_centroids):
-        centroids[k] = M_unrolled[:, assignments == k][:, 0]
+    M_unrolled = torch.stack(M_reshaped.chunk(n_blocks, dim=0), dim=0)
+    size_block = M_unrolled.size(1)
+    centroids = torch.zeros(n_blocks, n_centroids, size_block, device=M.device)
+    for m in range(n_blocks):
+        for k in range(n_centroids):
+            centroids[m, k] = M_unrolled[m, :, assignments[m] == k][:, 0]
 
     return centroids
 
@@ -41,8 +42,8 @@ def weight_from_centroids(centroids, assignments, n_blocks, k, conv):
     Constructs the 2D matrix from its centroids.
 
     Args:
-        - centroids: size (block_size x n_centroids)
-        - assignments: size (n_vectors)
+        - centroids: size (n_blocks, block_size x n_centroids)
+        - assignments: size (n_blocks, n_vectors)
         _ n_blocks: numnber of blocks per column
         - k: kernel size (set to 1 if not is_conv)
         - is_conv: convolutional or linear layer
@@ -53,7 +54,7 @@ def weight_from_centroids(centroids, assignments, n_blocks, k, conv):
             (2) reshape it in the case of fully-connected of convolutional layer
     """
 
-    M_hat_unrolled = torch.cat(centroids[assignments].t().chunk(n_blocks, dim=1), dim=0)
-    M_hat_reshaped = reshape_back_weight(M_hat_unrolled, k=k, conv=conv)
-
-    return M_hat_reshaped
+    M_hat_reshaped = torch.gather(centroids, 1, assignments.unsqueeze(2).repeat(1, 1, centroids.size(2))) #(n_blocks, C_out x k x k, block_size)
+    M_hat_reshaped = M_hat_reshaped.permute(0, 2, 1)
+    M_hat_reshaped = M_hat_reshaped.reshape(-1, M_hat_reshaped.size(2)) #(C_in,  C_out x k x k)
+    return reshape_back_weight(M_hat_reshaped, k=k, conv=conv)

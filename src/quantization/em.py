@@ -42,7 +42,7 @@ class EM():
         self.eps = eps
         self.verbose = verbose
         self.centroids = torch.Tensor()
-        self.assignments = torch.Tensor() # (, n_blocks x C_out)
+        self.assignments = torch.Tensor() # (n_blocks, C_out x k x k)
         self.objective = []
 
     def initialize_centroids(self, M):
@@ -53,11 +53,14 @@ class EM():
             - M: weight matrix of size (in_features x out_features)
         """
 
-        in_features, out_features = M.size()
-        indices = torch.randint(low=0, high=out_features, size=(self.n_centroids,)).long()
-        self.centroids = M[:, indices].t()  # (n_centroids x in_features)
+        self.centroids = torch.zeros(M.size(0), self.n_centroids, M.size(1)).cuda() # (n_blocks, C_out x k x k)
+        self.assignments = torch.zeros(M.size(0), M.size(2)).long().cuda()
+        for i, M_i in enumerate(M):
+            in_features, out_features = M_i.size()
+            indices = torch.randint(low=0, high=out_features, size=(self.n_centroids,)).long()
+            self.centroids[i] = M_i[:, indices].t()  # (n_centroids x block_size)
 
-    def step(self, in_activations, in_activations_eval, M, i):
+    def step(self, in_activations, in_activations_eval, M, i, j):
         """
         There are two standard steps for each iteration: expectation (E) and
         minimization (M). The E-step (assignment) is performed with an exhaustive
@@ -77,17 +80,17 @@ class EM():
         """
 
         # network for parallelization of computations
-        self.compute_distances_parallel = ComputeDistances(M, self.centroids)
+        self.compute_distances_parallel = ComputeDistances(M, self.centroids[j])
 
         # pre-compute A_pinv to factorize computations, on CPU to avoid CUDA oom error
         A_pinv = torch.pinverse(in_activations)
 
         # assignments (E-step)
-        distances = self.compute_distances(in_activations)  # (n_centroids x out_features)
-        self.assignments = torch.argmin(distances, dim=0)   # (out_features)
+        distances = self.compute_distances(in_activations, j)  # (n_centroids x out_features)
+        self.assignments[j] = torch.argmin(distances, dim=0)   # (out_features)
 
         # empty clusters
-        counts = Counter(map(lambda x: x.item(), self.assignments))
+        counts = Counter(map(lambda x: x.item(), self.assignments[j]))
         empty_clusters = set(range(self.n_centroids)) - set(counts.keys())
         n_empty_clusters = len(empty_clusters)
 
@@ -95,35 +98,35 @@ class EM():
             # given an empty cluster, find most populated cluster and split it into two
             k = random.choice(list(empty_clusters))
             m = counts.most_common(1)[0][0]
-            e = torch.randn_like(self.centroids[m]) * self.eps
-            self.centroids[k] = self.centroids[m].clone()
-            self.centroids[k] += e
-            self.centroids[m] -= e
+            e = torch.randn_like(self.centroids[j, m]) * self.eps
+            self.centroids[j, k] = self.centroids[j, m].clone()
+            self.centroids[j, k] += e
+            self.centroids[j, m] -= e
             print(k, len(empty_clusters))
 
             # recompute assignments
-            distances = self.compute_distances(in_activations)  # (n_centroids x out_features)
-            self.assignments = torch.argmin(distances, dim=0)   # (out_features)
+            distances = self.compute_distances(in_activations, j)  # (n_centroids x out_features)
+            self.assignments[j] = torch.argmin(distances, dim=0)   # (out_features)
 
             # check for empty clusters
-            counts = Counter(map(lambda x: x.item(), self.assignments))
+            counts = Counter(map(lambda x: x.item(), self.assignments[j]))
             empty_clusters = set(range(self.n_centroids)) - set(counts.keys())
 
         # centroids (M-step)
         for k in range(self.n_centroids):
-            M_k = M[:, self.assignments == k]  # (in_features x size_of_cluster_k)
+            M_k = M[:, self.assignments[j] == k]  # (in_features x size_of_cluster_k)
             B = in_activations.mm(M_k)
             self.centroids[k] = solve_stack(A=in_activations, B=B, A_pinv=A_pinv)  # (in_features)
 
         # book-keeping
         n_samples_eval = 128
         in_activations_eval = in_activations_eval[:n_samples_eval]
-        normalize = np.sqrt(n_samples_eval * len(self.assignments))  # np.sqrt(out_activations.numel())
-        obj = (in_activations_eval.mm(self.centroids[self.assignments].t() - M)).norm(p=2).div(normalize).item()  # (n_samples x in_features).mm((out_features x in_features).t()) -> (n_samples x out_features) -> 1
+        normalize = np.sqrt(n_samples_eval * len(self.assignments[j]))  # np.sqrt(out_activations.numel())
+        obj = (in_activations_eval.mm(self.centroids[j, self.assignments[j]].t() - M)).norm(p=2).div(normalize).item()  # (n_samples x in_features).mm((out_features x in_features).t()) -> (n_samples x out_features) -> 1
         self.objective.append(obj)
-        if self.verbose: print("Iteration: {},\t objective: {:.6f},\t resolved empty clusters: {}".format(i, obj, n_empty_clusters))
+        if self.verbose: print("Subspace: {},\t Iteration: {},\t objective: {:.6f},\t resolved empty clusters: {}".format(j, i, obj, n_empty_clusters))
 
-    def compute_distances(self, in_activations):
+    def compute_distances(self, in_activations, j):
         """
         For every centroid m and every input activation in_activation, computes
 
@@ -143,10 +146,10 @@ class EM():
               the tensors fit into the memory of the GPU
         """
 
-        self.compute_distances_parallel.update_centroids(self.centroids)
+        self.compute_distances_parallel.update_centroids(self.centroids[j])
         return self.compute_distances_parallel(in_activations)
 
-    def assign(self, in_activations, M):
+    def assign(self, in_activations, M, j):
         """
         Assigns each column of M to its closest centroid, thus essentially
         performing the E-step in train().
@@ -163,9 +166,9 @@ class EM():
         """
 
         # network for parallelization of computations
-        self.compute_distances_parallel = ComputeDistances(M, self.centroids)
+        self.compute_distances_parallel = ComputeDistances(M, self.centroids[j])
 
-        distances = self.compute_distances(in_activations)  # (n_centroids x out_features)
+        distances = self.compute_distances(in_activations, j)  # (n_centroids x out_features)
         assignments = torch.argmin(distances, dim=0)        # (out_features)
 
         return assignments

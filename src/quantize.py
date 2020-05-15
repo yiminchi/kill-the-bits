@@ -161,13 +161,16 @@ def main():
             out_features, in_features, k, _ = sizes
             block_size = args.block_size_cv if k > 1 else args.block_size_pw
             n_centroids = args.n_centroids_cv if k > 1 else args.n_centroids_pw
-            n_blocks = in_features * k * k // block_size
+            n_blocks = in_features // block_size
+            # make the model size is same as the without subpace
+            n_centroids = n_centroids // block_size
         else:
             k = 1
             out_features, in_features = sizes
             block_size = args.block_size_fc
             n_centroids = args.n_centroids_fc
             n_blocks = in_features // block_size
+            n_centroids = n_centroids // block_size
 
         # clamp number of centroids for stability
         powers = 2 ** np.arange(0, 16, 1)
@@ -180,7 +183,7 @@ def main():
         size_index += size_index_layer
 
         # centroids stored in float16
-        size_centroids_layer = n_centroids * block_size * 2 / 1024 / 1024
+        size_centroids_layer = n_centroids * in_features * 2 / 1024 / 1024
         size_centroids += size_centroids_layer
 
         # size of non-compressed layers, e.g. BatchNorms or first 7x7 convolution
@@ -367,13 +370,15 @@ def main():
             out_features, in_features, k, _ = sizes
             block_size = args.block_size_cv if k > 1 else args.block_size_pw
             n_centroids = args.n_centroids_cv
-            n_blocks = in_features * k * k // block_size
+            n_blocks = in_features // block_size
+            n_centroids = n_centroids // block_size
         else:
             k = 1
             out_features, in_features = sizes
             block_size = args.block_size_fc
             n_centroids = args.n_centroids_fc
             n_blocks = in_features // block_size
+            n_centroids = n_centroids // block_size
 
         # clamp number of centroids for stability
         powers = 2 ** np.arange(0, 16, 1)

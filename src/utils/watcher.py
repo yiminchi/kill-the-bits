@@ -46,7 +46,7 @@ class ActivationWatcher:
     def _get_layers(self):
         # get proper layer names
         keys = self.model.state_dict().keys()
-        layers = [k[:k.rfind(".")] for k in keys if 'bias' not in k]
+        layers = [k[:k.rfind(".")] for k in keys if 'weight' in k]
         # remove BN layers
         layers = [layer for layer in layers if not isinstance(attrgetter(layer)(self.model), nn.BatchNorm2d)]
 

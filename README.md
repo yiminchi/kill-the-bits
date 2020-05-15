@@ -12,6 +12,13 @@ python quantize.py --model resnet18 --block-size-cv 8 --block-size-pw 4 --n-cent
 ```
 Performance:
 
+### Subspace
+Each subspace have it own centroids
+```bash
+python quantize.py --model resnet18 --block-size-cv 8 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
+```
+Performance:
+
 # And the bit goes down
 
 This repository contains the implementation of our paper: [And the bit goes down: Revisiting the quantization of neural networks](https://arxiv.org/abs/1907.05686) (ICLR 2020) as well as the compressed models we obtain (ResNets and Mask R-CNN).

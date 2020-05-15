@@ -88,16 +88,16 @@ class CentroidSGD(Optimizer):
                 # unroll gradients
                 d_p = p.grad.data
                 d_p_unroll = reshape_weight(d_p)
-                d_p_unroll = torch.cat(d_p_unroll.chunk(n_blocks, dim=0), dim=1)
+                d_p_unroll = torch.stack(d_p_unroll.chunk(n_blocks, dim=0), dim=0)
 
                 # reduce gradients
-                select = assignments[:, None] == torch.arange(int(n_centroids), device=p.device)
-                select = select.float() / torch.bincount(assignments).float()
-                d_p_unroll = d_p_unroll.mm(select)[:, assignments]
+                select = (assignments[:, :, None] == torch.arange(int(n_centroids), device=p.device)).float()
+                d_p_unroll = d_p_unroll.matmul(select) / select.sum(1)[:, None, :]
+                d_p_unroll = torch.gather(d_p_unroll, 2, assignments.unsqueeze(1).repeat(1, d_p_unroll.size(1), 1))
 
                 # roll gradients back
                 conv = len(p.size()) == 4
-                d_p = torch.cat(d_p_unroll.chunk(n_blocks, dim=1), dim=0)
+                d_p = d_p_unroll.reshape(-1, d_p_unroll.size(2))
                 d_p = reshape_back_weight(d_p, k=kernel_size, conv=conv)
 
                 # handle weight decay and momentum
