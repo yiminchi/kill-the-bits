@@ -1,4 +1,5 @@
-### Fuse the convolution and batchnorm, and finetune the bias of the fused convolution
+### Fusion
+the convolution and batchnorm, and finetune the bias of the fused convolution
 ```bash
 python quantize.py --model resnet18 --block-size-cv 9 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
