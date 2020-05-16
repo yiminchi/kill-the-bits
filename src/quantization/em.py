@@ -34,7 +34,7 @@ class EM():
         - All the relevant dimensions are specified in the code
     """
 
-    def __init__(self, n_centroids, M, n_samples=-1, n_iter=20, eps=1e-8, verbose=True):
+    def __init__(self, n_centroids, M, n_samples=-1, n_iter=20, eps=1e-8, verbose=False):
         # attributes
         self.n_centroids = n_centroids
         self.n_samples = n_samples
@@ -102,7 +102,7 @@ class EM():
             self.centroids[j, k] = self.centroids[j, m].clone()
             self.centroids[j, k] += e
             self.centroids[j, m] -= e
-            print(k, len(empty_clusters))
+            # print(k, len(empty_clusters))
 
             # recompute assignments
             distances = self.compute_distances(in_activations, j)  # (n_centroids x out_features)
