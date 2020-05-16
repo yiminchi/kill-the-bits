@@ -10,14 +10,14 @@ Change the dimension of the vector from HW dimension to input channel dimension,
 ```bash
 python quantize.py --model resnet18 --block-size-cv 8 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
-Performance:
+Performance: 59.53%
 
 ### Subspace
 Each subspace have it own centroids
 ```bash
 python quantize.py --model resnet18 --block-size-cv 8 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
-Performance:
+Performance: 54.39%
 
 # And the bit goes down
 
