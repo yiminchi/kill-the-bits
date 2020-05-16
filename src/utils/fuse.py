@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from operator import attrgetter
+from models.fused_module import *
 
 def broadcast_correction_weight(c: torch.Tensor):
     """
@@ -23,15 +24,15 @@ def fuse_convbn_param(weight, bias, gamma, beta, running_var, running_mean, eps)
 
     return weight_corrected, bias_corrected
 
-def _convert_model(module, prev_name, layer, type):
+def _convert_model(module, prev_name, layer, replace):
     for name, child in module.named_children():
         if list(child.named_children()):
-            _convert_model(child, prev_name+name+'.', layer, type)
+            _convert_model(child, prev_name+name+'.', layer, replace)
 
         for name, mod in list(module.named_children()):
             if prev_name+name == layer:
-                setattr(module, name, type())
-                print('Convert {} to'.format(layer), type())
+                setattr(module, name, replace)
+                print('Convert {} to'.format(layer), replace)
                 return
 
 def fuse_ConvBn(model, conv, bn):
@@ -39,6 +40,23 @@ def fuse_ConvBn(model, conv, bn):
     bn_layer = attrgetter(bn)(model)
     weight, bias = fuse_convbn_param(conv_layer.weight, conv_layer.bias, bn_layer.weight, bn_layer.bias, 
                                 bn_layer.running_var, bn_layer.running_mean, bn_layer.eps)
-    conv_layer.weight = torch.nn.Parameter(weight)
-    conv_layer.bias = torch.nn.Parameter(bias)
-    _convert_model(model, '', bn, type=torch.nn.Identity)
+    replace_conv = conv_LQ(weight, bias, conv_layer.stride, conv_layer.padding, conv_layer.dilation, conv_layer.groups)
+    _convert_model(model, '', conv, replace=replace_conv)
+    _convert_model(model, '', bn, replace=torch.nn.Identity())
+    return model.cuda()
+
+def replace_relu(model, relu):
+    _convert_model(model, '', relu, replace=ReLU_LQ())
+    return model.cuda()
+
+def replace_linear(model, linear):
+    linear_layer = attrgetter(linear)(model)
+    _convert_model(model, '', linear, replace=linear_LQ(linear_layer.weight, linear_layer.bias))
+    return model.cuda()
+
+def insert_io(model, input=True):
+    if input:
+        model = nn.Sequential(IO_LQ(), model)
+    else:
+        model.add_module('last', IO_LQ())
+    return model.cuda()

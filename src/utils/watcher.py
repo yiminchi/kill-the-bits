@@ -70,6 +70,15 @@ class ActivationWatcher:
 
         return layers
 
+    def _get_all_layers(self):
+        layers = [name for name, mod in self.model.named_modules() if name 
+                and (isinstance(attrgetter(name)(self.model), torch.nn.BatchNorm2d) 
+                or isinstance(attrgetter(name)(self.model), torch.nn.ReLU) 
+                or isinstance(attrgetter(name)(self.model), torch.nn.Conv2d)
+                or isinstance(attrgetter(name)(self.model), torch.nn.Linear))]
+
+        return layers
+
     def _register_hooks(self):
         # define hook to save output after each layer
         def fwd_hook(module, input, output):

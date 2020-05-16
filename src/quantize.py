@@ -29,7 +29,7 @@ from utils.watcher import ActivationWatcher
 from utils.dynamic_sampling import dynamic_sampling
 from utils.statistics import compute_size
 from utils.utils import centroids_from_weights, weight_from_centroids
-from utils.fuse import fuse_ConvBn
+from utils.fuse import fuse_ConvBn, replace_relu, replace_linear, insert_io
 
 
 parser = argparse.ArgumentParser(description='And the bit goes down: Revisiting the quantization of neural networks')
@@ -114,9 +114,11 @@ def main():
     watcher = ActivationWatcher(student)
     layers = [layer for layer in watcher.layers[1:] if args.block in layer]
     bn_layers = watcher._get_bn_layers()[1:]
+    all_layers = watcher._get_all_layers()[2:]
 
     # fuse the first layer
-    fuse_ConvBn(student, watcher.layers[0], watcher._get_bn_layers()[0])
+    student = fuse_ConvBn(student, watcher.layers[0], watcher._get_bn_layers()[0])
+    attrgetter(watcher.layers[0])(student).quantize = False
 
     # data loading code
     train_loader, test_loader = load_data(data_path=args.data_path, batch_size=args.batch_size, nb_workers=args.n_workers)
@@ -140,8 +142,18 @@ def main():
     print('Step 1: Quantize network')
     t = time.time()
     top_1 = 0
+    quantized_io = []
 
     for i, layer in enumerate(layers):
+        # calibration
+        if isinstance(attrgetter(all_layers[0])(student), torch.nn.ReLU):
+            student = replace_relu(student, all_layers[0])
+            attrgetter(all_layers[0])(student).calibration = True
+            evaluate(train_loader, student, criterion, n_iter=100)
+            attrgetter(all_layers[0])(student).calibration = False
+            quantized_io.append(all_layers[0])
+            all_layers.remove(all_layers[0])
+
         # get weight matrix and detach it from the computation graph (.data should be enough, adding .detach() as a safeguard)
         M = attrgetter(layer + '.weight.data')(student).detach()
         sizes = M.size()
@@ -155,7 +167,9 @@ def main():
         # block size, distinguish between fully connected and convolutional case
         if is_conv:
             # fuse conv and bn
-            fuse_ConvBn(student, layer, bn_layers[i])
+            student = fuse_ConvBn(student, layer, bn_layers[i])
+            all_layers.remove(layer)
+            all_layers.remove(bn_layers[i])
             M = attrgetter(layer + '.weight.data')(student).detach()
 
             out_features, in_features, k, _ = sizes
@@ -165,6 +179,8 @@ def main():
             # make the model size is same as the without subpace
             n_centroids = n_centroids // block_size
         else:
+            student = replace_linear(student, layer)
+            all_layers.remove(layer)
             k = 1
             out_features, in_features = sizes
             block_size = args.block_size_fc
@@ -243,19 +259,43 @@ def main():
             except FileNotFoundError:
                 print('Quantizing layer')
 
+        #  the previous io layer index
+        if 'downsample' in layer:
+            if args.model == 'resnet18':
+                n_pre = -2
+            elif args.model =='resnet50':
+                n_pre = -3
+        else:
+            n_pre = -1
+
         #  gather input activations
+        attrgetter(quantized_io[n_pre])(student).quantize = False
         n_iter_activations = math.ceil(args.n_activations / args.batch_size)
         watcher = ActivationWatcher(student, layer=layer)
         in_activations_current = watcher.watch(train_loader, criterion, n_iter_activations)
         in_activations_current = in_activations_current[layer]
-        quantizer._reshape_activations(in_activations_current)
+        attrgetter(quantized_io[n_pre])(student).quantize = True
+        quantizer._reshape_activations(in_activations_current, attrgetter(quantized_io[n_pre])(student))
 
         # quantize layer
-        quantizer.encode()
-
+        quantizer.encode(quantize=True)
         # assign quantized weight matrix
         M_hat = quantizer.decode()
         attrgetter(layer + '.weight')(student).data = M_hat
+        top_1 = evaluate(test_loader, student, criterion).item()
+        print('Quantizing time: {:.0f}min, Top1 after quantization: {:.2f}\n'.format((time.time() - t) / 60, top_1))
+
+        quantizer = PQ(M, n_activations=args.n_activations,
+                       n_samples=n_samples, eps=args.eps, n_centroids=n_centroids,
+                       n_iter=args.n_iter, n_blocks=n_blocks, k=k,
+                       stride=stride, padding=padding, groups=groups)
+        quantizer._reshape_activations(in_activations_current, attrgetter(quantized_io[n_pre])(student))
+        quantizer.encode(quantize=False)
+        # assign quantized weight matrix
+        M_hat = quantizer.decode()
+        attrgetter(layer + '.weight')(student).data = M_hat
+        top_1 = evaluate(test_loader, student, criterion).item()
+        print('Quantizing time: {:.0f}min, Top1 after quantization: {:.2f}\n'.format((time.time() - t) / 60, top_1))
 
         # top1
         top_1 = evaluate(test_loader, student, criterion).item()
@@ -406,6 +446,7 @@ def main():
         state_dict_compressed[layer] = state_dict_layer
 
     # save model
+    state_dict_compressed['model'] = student.state_dict()
     torch.save(state_dict_compressed, os.path.join(args.save, 'state_dict_compressed.pth'))
 
     # book-keeping

@@ -48,11 +48,12 @@ class PQ(EM):
         M_reshaped = self.sample_weights()
         self.initialize_centroids(M_reshaped)
 
-    def _reshape_activations(self, in_activations):
+    def _reshape_activations(self, in_activations, layer):
         """
         Rehshapes if conv or fully-connected.
         """
-
+        self.act_scale = torch.pow(2, torch.ceil(torch.log2(layer.scale)))
+        self.act_zero_point = layer.zero_point
         self.in_activations = reshape_activations(in_activations,
                                                   k=self.k,
                                                   stride=self.stride,
@@ -66,7 +67,7 @@ class PQ(EM):
         in_activations: (k x k x N x H x W) x C_in -> n_blocks x (k x k x N x H x W) x block_size
         """
 
-        return torch.stack(in_activations.chunk(self.n_blocks, dim=1), dim=0)
+        return torch.cat(in_activations.chunk(self.n_blocks, dim=1), dim=0)
 
     def unroll_weight(self, M):
         """
@@ -83,7 +84,7 @@ class PQ(EM):
         """
 
         # get indices
-        indices = torch.randint(low=0, high=self.in_activations.size(0), size=(self.n_samples,)).long()
+        indices = torch.randint(low=0, high=self.in_activations.size(0), size=(self.n_samples//self.n_blocks,)).long()
 
         # sample current in_activations
         in_activations = self.unroll_activations(self.in_activations[indices])
@@ -96,7 +97,7 @@ class PQ(EM):
 
         return self.unroll_weight(self.M).cuda()
 
-    def encode(self):
+    def encode(self, quantize=True):
         """
         Args:
             - in_activations: input activations of size (n_samples x in_features)
@@ -113,7 +114,8 @@ class PQ(EM):
             if self.sample:
                 in_activations_reshaped = self.sample_activations()
             for j in range(self.n_blocks):
-                self.step(in_activations_reshaped[j], in_activations_reshaped_eval[j], M_reshaped[j], i, j)
+                self.step(in_activations_reshaped, in_activations_reshaped_eval, M_reshaped[j], i, j,
+                            self.act_scale, self.act_zero_point, quantize)
 
     def decode(self, redo=False):
         """
@@ -126,7 +128,7 @@ class PQ(EM):
             in_activations_reshaped = self.sample_activations()
             M_reshaped = self.sample_weights()
             for j in range(self.n_blocks):
-                assignments = self.assign(in_activations_reshaped[j], M_reshaped[j], j)
+                assignments = self.assign(in_activations_reshaped[j], M_reshaped[j], j, self.act_scale, self.act_zero_point)
                 self.assignments[j] = assignments
         else:
             assignments = self.assignments

@@ -17,7 +17,7 @@ from data import load_data
 from utils.training import evaluate
 from utils.watcher import ActivationWatcher as ActivationWatcherResNet
 from utils.utils import weight_from_centroids
-from utils.fuse import fuse_ConvBn
+from utils.fuse import fuse_ConvBn, replace_relu, replace_linear
 
 
 parser = argparse.ArgumentParser(description='Inference for quantized networks')
@@ -81,11 +81,26 @@ def main():
         bias = state_dict_layer['bias']
         if is_conv:
             fuse_ConvBn(model, layer, bn_layers[i])
+        else:
+            replace_linear(model, layer)
 
         # instantiate matrix
         M_hat = weight_from_centroids(centroids, assignments, n_blocks, k, is_conv)
         attrgetter(layer + '.weight')(model).data = M_hat
         attrgetter(layer + '.bias')(model).data = bias
+    
+    # replace relu
+    relu_list = [name for name, mod in model.named_modules() if name 
+            and isinstance(attrgetter(name)(model), torch.nn.ReLU)]
+    for relu in relu_list:
+        model = replace_relu(model, relu)
+
+    # load scale and zero_point
+    model_dict = model.state_dict()
+    for key, value in state_dict_compressed['model'].items():
+        if 'scale' in key or 'zero_point' in key:
+            model_dict[key] = value
+    model.load_state_dict(model_dict)
 
     # evaluate the model
     top_1 = evaluate(test_loader, model, criterion, device=device).item()

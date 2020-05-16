@@ -30,6 +30,8 @@ def finetune_centroids(train_loader, student, teacher, criterion, optimizer, opt
     progress = ProgressMeter(len(train_loader), batch_time, data_time, losses, top1,
                              top5, prefix="Epoch: [{}]".format(epoch))
 
+    # switch to train mode
+    student.train()
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
         # early stop

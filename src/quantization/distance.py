@@ -29,8 +29,8 @@ class ComputeDistances(nn.Module):
         self.distances = nn.parallel.DataParallel(Distances(M, centroids)).cuda()
         self.reduce = Reduce()
 
-    def forward(self, in_activations):
-        return self.reduce(self.distances(in_activations))
+    def forward(self, in_activations, in_activations_q):
+        return self.reduce(self.distances(in_activations, in_activations_q))
 
     def update_centroids(self, centroids):
         self.distances.module.centroids.data = centroids
@@ -53,7 +53,7 @@ class Distances(nn.Module):
         self.M = nn.Parameter(M, requires_grad=False)
         self.centroids = nn.Parameter(centroids, requires_grad=False)
 
-    def forward(self, in_activations):
+    def forward(self, in_activations, in_activations_q):
         # two cases
         nb_M_chunks = 1
         nb_centroids_chunks = 1
@@ -62,10 +62,9 @@ class Distances(nn.Module):
             try:
                 return torch.cat([
                             torch.cat([
-                                torch.matmul(
-                                    in_activations[None, :, :],
-                                    M_c[None, :, :] - centroids_c[:, :, None]
-                                ).norm(p=2, dim=1).pow(2)
+                                (in_activations_q.mm(centroids_c.t())[:, :, None] 
+                                - in_activations.mm(M_c)[:, None, :] # (n_samples, n_centroids, output_features)
+                                ).norm(p=2, dim=0).pow(2)
                                 for centroids_c in self.centroids.chunk(nb_centroids_chunks, dim=0)
                             ], dim=0)
                             for M_c in self.M.chunk(nb_M_chunks, dim=1)
