@@ -63,10 +63,10 @@ class PQ(EM):
         """
         Unroll activations.
         n_blocks: in_features // block_size
-        in_activations: (k x k x N x H x W) x C_in -> n_blocks x (k x k x N x H x W) x block_size
+        in_activations: (k x k x N x H x W) x C_in -> (n_blocks x k x k x N x H x W) x block_size
         """
 
-        return torch.stack(in_activations.chunk(self.n_blocks, dim=1), dim=0)
+        return torch.cat(in_activations.chunk(self.n_blocks, dim=1), dim=0)
 
     def unroll_weight(self, M):
         """
@@ -83,7 +83,7 @@ class PQ(EM):
         """
 
         # get indices
-        indices = torch.randint(low=0, high=self.in_activations.size(0), size=(self.n_samples,)).long()
+        indices = torch.randint(low=0, high=self.in_activations.size(0), size=(self.n_samples // self.n_blocks,)).long()
 
         # sample current in_activations
         in_activations = self.unroll_activations(self.in_activations[indices])
@@ -113,7 +113,7 @@ class PQ(EM):
             if self.sample:
                 in_activations_reshaped = self.sample_activations()
             for j in range(self.n_blocks):
-                self.step(in_activations_reshaped[j], in_activations_reshaped_eval[j], M_reshaped[j], i, j)
+                self.step(in_activations_reshaped, in_activations_reshaped_eval, M_reshaped[j], i, j)
 
     def decode(self, redo=False):
         """
@@ -126,7 +126,7 @@ class PQ(EM):
             in_activations_reshaped = self.sample_activations()
             M_reshaped = self.sample_weights()
             for j in range(self.n_blocks):
-                assignments = self.assign(in_activations_reshaped[j], M_reshaped[j], j)
+                assignments = self.assign(in_activations_reshaped, M_reshaped[j], j)
                 self.assignments[j] = assignments
         else:
             assignments = self.assignments
