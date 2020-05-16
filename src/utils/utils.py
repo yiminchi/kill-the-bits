@@ -58,3 +58,54 @@ def weight_from_centroids(centroids, assignments, n_blocks, k, conv):
     M_hat_reshaped = M_hat_reshaped.permute(0, 2, 1)
     M_hat_reshaped = M_hat_reshaped.reshape(-1, M_hat_reshaped.size(2)) #(C_in,  C_out x k x k)
     return reshape_back_weight(M_hat_reshaped, k=k, conv=conv)
+
+class LinearQuantizeSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, scale, zero_point, num_bits=8, inplace=True):
+        if inplace:
+            ctx.mark_dirty(input)
+        input = quantize(input, scale, zero_point, num_bits=num_bits, inplace=inplace)
+        input = dequantize(input, scale, zero_point, inplace=inplace)
+        return input
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Straight-through estimator
+        return grad_output, None, None, None, None
+
+def quant_weight_param(param, scale, zero_point, num_bits=8):
+    """
+    Asymmetric
+    """
+    param_min, param_max = get_tensor_min_max(param)
+    scale[:] = (param_max-param_min)/(2**num_bits - 1)
+    scale = quantize(scale, 1/2**16, 0, inplace=True, num_bits=16)
+    scale.clamp_min_(1)  # avoid the zero scale
+    scale = dequantize(scale, 1/2**16, 0, inplace=True)
+    zero_point[:] = torch.floor(-param_min/scale + 0.5)
+
+def quant_act_param(param, scale, zero_point, num_bits=8):
+    """
+    Asymmetric
+    """
+    param_min, param_max = get_tensor_min_max(param)
+    scale[:] = 0.9 * (param_max-param_min)/(2**num_bits - 1) + 0.1 * scale
+    running_scale = torch.pow(2, torch.ceil(torch.log2(scale)))
+    zero_point[:] = torch.floor(-param_min/running_scale + 0.5)
+    return running_scale
+
+def get_tensor_min_max(t):
+    param_min, param_max = t.min(), t.max()
+    return torch.clamp_max(param_min, 0), torch.clamp_min(param_max, 0)
+
+def quantize(input, scale, zero_point, inplace=True, num_bits=8):
+    if inplace:
+        input.div_(scale).add_(0.5).floor_().add_(zero_point).clamp_(0, 2 ** num_bits - 1)
+        return input
+    return torch.clamp(torch.floor(input / scale + 0.5) + zero_point, 0, 2 ** num_bits - 1)
+
+def dequantize(input, scale, zero_point, inplace=True):
+    if inplace:
+        input.add_(0.5).floor_().sub_(zero_point).mul_(scale)
+        return input
+    return (torch.floor(input + 0.5) - zero_point) * scale
