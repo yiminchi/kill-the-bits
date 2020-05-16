@@ -116,7 +116,7 @@ class EM():
         for k in range(self.n_centroids):
             M_k = M[:, self.assignments[j] == k]  # (in_features x size_of_cluster_k)
             B = in_activations.mm(M_k)
-            self.centroids[k] = solve_stack(A=in_activations, B=B, A_pinv=A_pinv)  # (in_features)
+            self.centroids[j, k] = solve_stack(A=in_activations, B=B, A_pinv=A_pinv)  # (in_features)
 
         # book-keeping
         n_samples_eval = 128
