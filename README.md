@@ -1,23 +1,28 @@
 ### Fusion
-the convolution and batchnorm, and finetune the bias of the fused convolution
+the convolution and batchnorm, and finetune the bias of the fused convolution.
 ```bash
 python quantize.py --model resnet18 --block-size-cv 9 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
 Performance: 65.4%
 
 ### ChangeDim
-Change the dimension of the vector from HW dimension to input channel dimension, which means we split the input channel dimension space to several subspace 
+Change the dimension of the vector from HW dimension to input channel dimension, which means we split the input channel dimension space to several subspace.
 ```bash
 python quantize.py --model resnet18 --block-size-cv 8 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
 Performance: 59.53%
 
 ### Subspace
-Each subspace have it own centroids
+Each subspace have it own centroids.
 ```bash
 python quantize.py --model resnet18 --block-size-cv 8 --block-size-pw 4 --n-centroids-cv 256 --n-centroids-pw 256 --n-centroids-fc 2048 --data-path YOUR_IMAGENET_PATH
 ```
+
+Using its own subspace input vector to EM step.
 Performance: 54.39%
+
+Using all subspace input vector as the original algorithm to EM step.
+Performance: 57.26%
 
 # And the bit goes down
 
