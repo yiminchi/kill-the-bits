@@ -9,6 +9,7 @@ import torch
 
 from .em import EM
 from utils.reshape import reshape_weight, reshape_back_weight, reshape_activations
+from tqdm import tqdm
 
 
 class PQ(EM):
@@ -110,12 +111,15 @@ class PQ(EM):
         M_reshaped = self.sample_weights()
 
         # perform EM training steps
+        bar = tqdm(total=self.n_iter, ncols=100)
         for i in range(self.n_iter):
             if self.sample:
                 in_activations_reshaped = self.sample_activations()
             for j in range(self.n_blocks):
                 self.step(in_activations_reshaped, in_activations_reshaped_eval, M_reshaped[j], i, j,
                             self.act_scale, self.act_zero_point)
+            bar.update()
+        bar.close()
 
     def decode(self, redo=False):
         """

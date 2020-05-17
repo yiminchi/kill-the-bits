@@ -107,7 +107,7 @@ class EM():
             self.centroids[j, k] = self.centroids[j, m].clone()
             self.centroids[j, k] += e
             self.centroids[j, m] -= e
-            print(k, len(empty_clusters))
+            # print(k, len(empty_clusters))
 
             # recompute assignments
             distances = self.compute_distances(in_activations, in_activations_q, j)  # (n_centroids x out_features)
