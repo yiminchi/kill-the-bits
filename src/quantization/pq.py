@@ -97,7 +97,7 @@ class PQ(EM):
 
         return self.unroll_weight(self.M).cuda()
 
-    def encode(self, quantize=True):
+    def encode(self):
         """
         Args:
             - in_activations: input activations of size (n_samples x in_features)
@@ -115,7 +115,7 @@ class PQ(EM):
                 in_activations_reshaped = self.sample_activations()
             for j in range(self.n_blocks):
                 self.step(in_activations_reshaped, in_activations_reshaped_eval, M_reshaped[j], i, j,
-                            self.act_scale, self.act_zero_point, quantize)
+                            self.act_scale, self.act_zero_point)
 
     def decode(self, redo=False):
         """

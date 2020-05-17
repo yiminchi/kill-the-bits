@@ -14,7 +14,7 @@ import numpy as np
 
 from .solver import solve_stack
 from .distance import ComputeDistances
-from utils.utils import quantize, dequantize
+from utils.utils import quantize, dequantize, quant_weight_param
 
 
 class EM():
@@ -61,7 +61,7 @@ class EM():
             indices = torch.randint(low=0, high=out_features, size=(self.n_centroids,)).long()
             self.centroids[i] = M_i[:, indices].t()  # (n_centroids x block_size)
 
-    def step(self, in_activations, in_activations_eval, M, i, j, act_scale, act_zero_point, quantize):
+    def step(self, in_activations, in_activations_eval, M, i, j, act_scale, act_zero_point):
         """
         There are two standard steps for each iteration: expectation (E) and
         minimization (M). The E-step (assignment) is performed with an exhaustive
@@ -82,16 +82,13 @@ class EM():
 
         # network for parallelization of computations
         self.compute_distances_parallel = ComputeDistances(M, self.centroids[j])
-        self.quantize = quantize
 
         # quantize activation
-        in_activations_q = in_activations / act_scale + act_zero_point
-        in_activations_q[in_activations_q < 1] = torch.ceil(in_activations_q[in_activations_q < 1])
-        in_activations_q = torch.clamp(torch.floor(in_activations_q + 0.5), 0, 2 ** 8 - 1)
+        in_activations_q = quantize(in_activations, act_scale, act_zero_point, inplace=False)
         in_activations_q = dequantize(in_activations_q, act_scale, act_zero_point, inplace=False)
 
         # pre-compute A_pinv to factorize computations, on CPU to avoid CUDA oom error
-        A_pinv = torch.pinverse(in_activations_q) if quantize else torch.pinverse(in_activations)
+        A_pinv = torch.pinverse(in_activations_q)
 
         # assignments (E-step)
         distances = self.compute_distances(in_activations, in_activations_q, j)  # (n_centroids x out_features)
@@ -124,16 +121,14 @@ class EM():
         for k in range(self.n_centroids):
             M_k = M[:, self.assignments[j] == k]  # (in_features x size_of_cluster_k)
             B = in_activations.mm(M_k)
-            self.centroids[j, k] = solve_stack(A=in_activations_q, B=B, A_pinv=A_pinv) if quantize else solve_stack(A=in_activations, B=B, A_pinv=A_pinv)
+            self.centroids[j, k] = solve_stack(A=in_activations_q, B=B, A_pinv=A_pinv)
 
         # book-keeping
         n_samples_eval = 128
         in_activations_eval = in_activations_eval[:n_samples_eval]
 
         # quantize activation
-        in_activations_eval_q = in_activations_eval / act_scale + act_zero_point
-        in_activations_eval_q[in_activations_eval_q < 1] = torch.ceil(in_activations_eval_q[in_activations_eval_q < 1])
-        in_activations_eval_q = torch.clamp(torch.floor(in_activations_eval_q + 0.5), 0, 2 ** 8 - 1)
+        in_activations_eval_q = quantize(in_activations_eval, act_scale, act_zero_point, inplace=False)
         in_activations_eval_q = dequantize(in_activations_eval_q, act_scale, act_zero_point, inplace=False)
 
         normalize = np.sqrt(n_samples_eval * len(self.assignments[j]))  # np.sqrt(out_activations.numel())
@@ -162,10 +157,7 @@ class EM():
         """
 
         self.compute_distances_parallel.update_centroids(self.centroids[j])
-        if self.quantize:
-            return self.compute_distances_parallel(in_activations, in_activations_q)
-        else:
-            return self.compute_distances_parallel(in_activations, in_activations)
+        return self.compute_distances_parallel(in_activations, in_activations_q)
 
     def assign(self, in_activations, M, j, act_scale, act_zero_point):
         """
@@ -183,9 +175,7 @@ class EM():
               is called with distinct parameters in_activations and M
         """
         # quantize activation
-        in_activations_q = in_activations / act_scale + act_zero_point
-        in_activations_q[in_activations_q < 1] = torch.ceil(in_activations_q[in_activations_q < 1])
-        in_activations_q = torch.clamp(torch.floor(in_activations_q + 0.5), 0, 2 ** 8 - 1)
+        in_activations_q = quantize(in_activations, act_scale, act_zero_point, inplace=False)
         in_activations_q = dequantize(in_activations_q, act_scale, act_zero_point, inplace=False)
 
         # network for parallelization of computations

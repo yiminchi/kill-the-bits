@@ -278,24 +278,11 @@ def main():
         quantizer._reshape_activations(in_activations_current, attrgetter(quantized_io[n_pre])(student))
 
         # quantize layer
-        quantizer.encode(quantize=True)
-        # assign quantized weight matrix
-        M_hat = quantizer.decode()
-        attrgetter(layer + '.weight')(student).data = M_hat
-        top_1 = evaluate(test_loader, student, criterion).item()
-        print('Quantizing time: {:.0f}min, Top1 after quantization: {:.2f}\n'.format((time.time() - t) / 60, top_1))
+        quantizer.encode()
 
-        quantizer = PQ(M, n_activations=args.n_activations,
-                       n_samples=n_samples, eps=args.eps, n_centroids=n_centroids,
-                       n_iter=args.n_iter, n_blocks=n_blocks, k=k,
-                       stride=stride, padding=padding, groups=groups)
-        quantizer._reshape_activations(in_activations_current, attrgetter(quantized_io[n_pre])(student))
-        quantizer.encode(quantize=False)
         # assign quantized weight matrix
         M_hat = quantizer.decode()
         attrgetter(layer + '.weight')(student).data = M_hat
-        top_1 = evaluate(test_loader, student, criterion).item()
-        print('Quantizing time: {:.0f}min, Top1 after quantization: {:.2f}\n'.format((time.time() - t) / 60, top_1))
 
         # top1
         top_1 = evaluate(test_loader, student, criterion).item()
