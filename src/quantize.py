@@ -143,16 +143,15 @@ def main():
     t = time.time()
     top_1 = 0
     quantized_io = []
+    do_calibration = False
 
     for i, layer in enumerate(layers):
         # calibration
         if isinstance(attrgetter(all_layers[0])(student), torch.nn.ReLU):
             student = replace_relu(student, all_layers[0])
-            attrgetter(all_layers[0])(student).calibration = True
-            evaluate(train_loader, student, criterion, n_iter=100)
-            attrgetter(all_layers[0])(student).calibration = False
             quantized_io.append(all_layers[0])
             all_layers.remove(all_layers[0])
+            do_calibration = True
 
         # get weight matrix and detach it from the computation graph (.data should be enough, adding .detach() as a safeguard)
         M = attrgetter(layer + '.weight.data')(student).detach()
@@ -258,6 +257,13 @@ def main():
             # otherwise, quantize layer
             except FileNotFoundError:
                 print('Quantizing layer')
+
+        # calibration
+        if do_calibration:
+            attrgetter(quantized_io[-1])(student).calibration = True
+            evaluate(train_loader, student, criterion, n_iter=100)
+            attrgetter(quantized_io[-1])(student).calibration = False
+            do_calibration = False
 
         #  the previous io layer index
         if 'downsample' in layer:
